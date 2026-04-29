@@ -8,8 +8,10 @@ Run: python claude_bar.py
 
 import argparse
 import datetime
+import hashlib
 import json
 import pathlib
+import sqlite3
 import subprocess
 import threading
 import urllib.request
@@ -33,7 +35,20 @@ DEFAULT_INTERVAL = 600  # 10 min — auto-poll is opt-in (off by default)
 ICON_SETUP_DELAY_SECS = 0.5  # give the run loop time to start before loading the icon
 UPDATE_CHECK_DELAY_SECS = 5.0  # wait for run loop to settle before hitting GitHub
 COOKIE_NAMES = ("sessionKey", "__Secure-next-auth.session-token")
-BROWSERS = ("chrome", "safari", "firefox", "brave", "edge")  # edge support on macOS is limited in rookiepy
+BROWSERS = ("chrome", "dia", "safari", "firefox", "brave", "edge", "arc")  # edge support on macOS is limited in rookiepy
+
+# Chromium-based browsers that rookiepy doesn't natively support but follow the
+# standard Chromium-on-macOS encryption scheme (PBKDF2-HMAC-SHA1, salt "saltysalt",
+# 1003 iterations, AES-128-CBC, IV = 16 spaces). Each entry maps to:
+#   (cookie_db_relative_path, keychain_service, keychain_account)
+# The keychain account is the one shown by `security find-generic-password`.
+CHROMIUM_LIKE_BROWSERS = {
+    "dia": (
+        "Library/Application Support/Dia/User Data/Default/Cookies",
+        "Dia Safe Storage",
+        "Dia",
+    ),
+}
 ICON_PATH = pathlib.Path(__file__).parent / "icons8-claude-ai-96.png"
 DEBUG_DUMP_PATH = pathlib.Path.home() / "Library" / "Caches" / "claude-bar" / "last-response.json"
 
@@ -72,9 +87,87 @@ def check_for_update() -> tuple[str, str] | None:
 # Auth / cookie helpers
 # ---------------------------------------------------------------------------
 
+def _decrypt_chromium_cookie(encrypted: bytes, key: bytes) -> str | None:
+    """Decrypt a Chromium-on-macOS encrypted_value blob.
+
+    Format: prefix (b"v10" or b"v11") + AES-128-CBC ciphertext.
+    IV is 16 ASCII spaces. Chrome 130+ binds the cookie to its host+path by
+    prepending a 32-byte SHA-256 inside the encrypted plaintext; we strip that
+    if it's present.
+    """
+    if not encrypted or encrypted[:3] not in (b"v10", b"v11"):
+        return None
+    body = encrypted[3:]
+    iv_hex = "20" * 16
+    try:
+        result = subprocess.run(
+            ["openssl", "enc", "-aes-128-cbc", "-d", "-K", key.hex(), "-iv", iv_hex],
+            input=body, capture_output=True, check=True,
+        )
+    except subprocess.CalledProcessError:
+        return None
+    pt = result.stdout
+    if not pt:
+        return None
+    # PKCS7 unpad
+    pad = pt[-1]
+    if 1 <= pad <= 16:
+        pt = pt[:-pad]
+    # Strip the 32-byte host+path SHA-256 prefix (Chrome 130+) if the head looks
+    # non-printable. A real cookie value is always printable ASCII.
+    if len(pt) > 32 and any(b < 0x20 or b > 0x7E for b in pt[:8]):
+        pt = pt[32:]
+    try:
+        return pt.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def _load_chromium_like_cookies(browser: str, domain: str):
+    """Yield (name, value) tuples from a non-rookiepy-native Chromium browser.
+
+    Uses the macOS Keychain to fetch the AES key, reads the SQLite cookie store
+    in read-only mode, and decrypts each row via openssl. Stdlib + openssl only,
+    no extra Python deps.
+    """
+    rel_db, service, account = CHROMIUM_LIKE_BROWSERS[browser]
+    db_path = pathlib.Path.home() / rel_db
+    if not db_path.exists():
+        return
+    try:
+        pw = subprocess.run(
+            ["security", "find-generic-password", "-s", service, "-a", account, "-w"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+    except subprocess.CalledProcessError as exc:
+        print(f"[claude_bar] {browser}: keychain lookup failed ({exc.returncode})")
+        return
+    key = hashlib.pbkdf2_hmac("sha1", pw.encode("utf-8"), b"saltysalt", 1003, dklen=16)
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro&immutable=1", uri=True)
+        rows = conn.execute(
+            "SELECT name, encrypted_value FROM cookies WHERE host_key LIKE ?",
+            (f"%{domain}%",),
+        ).fetchall()
+        conn.close()
+    except sqlite3.Error as exc:
+        print(f"[claude_bar] {browser}: sqlite error: {exc}")
+        return
+    for name, encrypted in rows:
+        if name not in COOKIE_NAMES:
+            continue
+        value = _decrypt_chromium_cookie(encrypted, key)
+        if value:
+            yield name, value
+
+
 def get_session_cookie(browser: str):
     """Return (name, value) for the first matching claude.ai session cookie."""
     try:
+        if browser in CHROMIUM_LIKE_BROWSERS:
+            for name, value in _load_chromium_like_cookies(browser, "claude.ai"):
+                return name, value
+            return None, None
         loader = getattr(rookiepy, browser)
         for c in loader(["claude.ai"]):
             if c["name"] in COOKIE_NAMES:

@@ -6,7 +6,7 @@ readme = "README.md"
 license = { text = "MIT" }
 authors = [
     { name = "BOUSHABAMohammed (upstream)" },
-    { name = "Mantra", email = "mantra@100ms.live" },
+    { name = "Mantra (mntrspace fork)" },
 ]
 keywords = ["claude", "anthropic", "usage", "menu-bar", "macos"]
 requires-python = ">=3.12"

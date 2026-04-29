@@ -89,7 +89,7 @@ Click **"Always Allow"** to avoid being asked again. The prompt is from your bro
 
 - macOS 12 Monterey or later
 - A paid Claude subscription (usage data is only available for Pro/Team/Enterprise plans)
-- Logged in to [claude.ai](https://claude.ai) in Chrome, Safari, Firefox, Brave, or Edge
+- Logged in to [claude.ai](https://claude.ai) in Chrome, Dia, Safari, Firefox, Brave, Edge, or Arc
 
 ---
 
@@ -245,17 +245,21 @@ jq keys ~/Library/Caches/claude-bar/last-response.json
 
 ### `--browser` flag
 
-By default claude-bar tries Chrome, Safari, Firefox, Brave, and Edge in order. To force a specific browser:
+By default claude-bar tries Chrome, Dia, Safari, Firefox, Brave, Edge, and Arc in order. The first browser that has a `claude.ai` session cookie wins — there's no validation that the cookie is still good, so a stale cookie in an earlier browser will be used in preference to a fresh one in a later browser. **If you're logged into Claude in only one browser, pass it explicitly to be safe:**
 
 ```bash
-~/.local/share/claude-bar/run.sh --browser safari
+~/.local/share/claude-bar/run.sh --browser dia
 ~/.local/share/claude-bar/run.sh --browser chrome
+~/.local/share/claude-bar/run.sh --browser safari
 ~/.local/share/claude-bar/run.sh --browser firefox
 ~/.local/share/claude-bar/run.sh --browser brave
 ~/.local/share/claude-bar/run.sh --browser edge
+~/.local/share/claude-bar/run.sh --browser arc
 ```
 
 To persist the choice, edit `~/.local/share/claude-bar/run.sh` and append `--browser <name>` to the last line.
+
+**Note on Dia and Arc** — both are made by The Browser Company and are Chromium-based. `rookiepy` (the cookie-reading library) doesn't natively support Dia, so claude-bar reads the Dia cookie store directly via the macOS Keychain (`Dia Safe Storage`) + sqlite + `openssl` for AES decryption. No extra Python dependencies. Arc is supported by rookiepy directly.
 
 ---
 
