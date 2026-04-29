@@ -60,11 +60,11 @@ These are subtle and will silently break things if forgotten.
 The app makes exactly three external calls.
 
 **`GET https://claude.ai/api/organizations`**
-Returns a list of organizations the user belongs to. We take the first (`get_org_id`). Response shape (the app cares about):
+Returns a list of organizations the user belongs to. `get_org_id` picks one — by default the org with the highest "priority" (paid `billing_type` like `stripe_subscription` first, then more capabilities); a `--org NAME` CLI flag overrides this with an exact-match-then-startswith-then-substring search. Response shape (the app cares about):
 ```json
-[{"uuid": "...", "id": "..."}, ...]
+[{"uuid": "...", "id": "...", "name": "...", "billing_type": "...", "capabilities": [...]}, ...]
 ```
-Either `uuid` or `id` works.
+The selected org's name is printed at startup whenever there are multiple orgs, so you know which account is being polled.
 
 **`GET https://claude.ai/api/organizations/{org_id}/usage`**
 The interesting one. Returns the usage dict that the menu renders. The exact shape is **captured to disk on every successful refresh** at `~/Library/Caches/claude-bar/last-response.json` (mode 0600). Inspect that file for ground truth before assuming anything about the schema.

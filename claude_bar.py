@@ -14,7 +14,6 @@ import pathlib
 import sqlite3
 import subprocess
 import threading
-import urllib.request
 from datetime import timezone
 
 import rumps
@@ -27,7 +26,7 @@ from color_utils import (
     set_menu_title,
 )
 
-VERSION = "1.1.0"  # bump this with each release
+VERSION = "1.1.1"  # bump this with each release
 GITHUB_REPO = "mntrspace/claude-bar"
 
 INTERVAL_OPTIONS = (300, 600, 1800, 3600)  # seconds: 5, 10, 30, 60 min
@@ -66,14 +65,19 @@ def _parse_version(tag: str) -> tuple[int, ...]:
 
 
 def check_for_update() -> tuple[str, str] | None:
-    """Return (tag_name, html_url) if a newer release exists on GitHub, else None."""
+    """Return (tag_name, html_url) if a newer release exists on GitHub, else None.
+
+    Uses curl_cffi rather than urllib because the bundled Python on macOS often
+    lacks a working CA bundle, which made urllib raise CERTIFICATE_VERIFY_FAILED.
+    """
     try:
-        req = urllib.request.Request(
+        resp = requests.get(
             f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
             headers={"User-Agent": "claude-bar"},
+            timeout=10,
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read())
+        resp.raise_for_status()
+        data = resp.json()
         tag = data.get("tag_name", "")
         html_url = data.get("html_url", "")
         if tag and _parse_version(tag) > _parse_version(VERSION):
@@ -199,17 +203,65 @@ def build_session(browser: str | None = None) -> requests.Session:
 # API helpers
 # ---------------------------------------------------------------------------
 
-def get_org_id(session: requests.Session) -> str:
+FREE_BILLING_TYPES = {"default_claude_ai", "free", None, ""}
+
+
+def _org_priority(org: dict) -> tuple:
+    """Sort key — higher is better. Prefers paid subscriptions over free orgs,
+    then orgs with more capabilities. Stable on ties."""
+    billing = (org.get("billing_type") or org.get("rate_limit_tier") or "").strip()
+    is_paid = billing not in FREE_BILLING_TYPES
+    cap_count = len(org.get("capabilities") or [])
+    return (is_paid, cap_count)
+
+
+def get_org_id(session: requests.Session, org_hint: str | None = None) -> tuple[str, str]:
+    """Return (org_id, org_name) for the org we'll query.
+
+    Selection rules:
+      1. If `org_hint` is given, prefer the org whose name contains it (case-insensitive).
+      2. Otherwise prefer the org with the highest priority — paid subscription first,
+         then more capabilities (heuristic for "the active one").
+    """
     resp = session.get("https://claude.ai/api/organizations", timeout=10)
     resp.raise_for_status()
     orgs = resp.json()
     if not orgs:
         raise RuntimeError("No organizations returned from API")
-    org = orgs[0]
-    org_id = org.get("uuid") or org.get("id")
+
+    chosen = None
+    if org_hint:
+        needle = org_hint.lower()
+        # Score each org by match quality: exact > startswith > substring. Pick the
+        # highest score; tie-break by paid-plan priority. Avoids "100ms" greedily
+        # matching "mantra@100ms.live's Organization" before "100ms".
+        def _score(org):
+            name = (org.get("name") or "").lower()
+            if name == needle:
+                return 3
+            if name.startswith(needle):
+                return 2
+            if needle in name:
+                return 1
+            return 0
+        scored = [(o, _score(o)) for o in orgs]
+        best = max(scored, key=lambda pair: (pair[1], _org_priority(pair[0])))
+        if best[1] == 0:
+            available = ", ".join(repr(o.get("name") or "?") for o in orgs)
+            raise RuntimeError(
+                f"No organization name matched --org {org_hint!r}. Available: {available}"
+            )
+        chosen = best[0]
+    else:
+        chosen = max(orgs, key=_org_priority)
+
+    org_id = chosen.get("uuid") or chosen.get("id")
     if not org_id:
         raise RuntimeError("Organization has no 'uuid' or 'id' field")
-    return org_id
+    name = chosen.get("name") or "(unnamed)"
+    if len(orgs) > 1:
+        print(f"[claude_bar] {len(orgs)} orgs found; using '{name}'. Override with --org NAME.")
+    return org_id, name
 
 
 def fetch_usage(session: requests.Session, org_id: str) -> dict:
@@ -270,9 +322,10 @@ def fmt_date(iso) -> str:
 # ---------------------------------------------------------------------------
 
 class ClaudeBar(rumps.App):
-    def __init__(self, browser: str | None = None):
+    def __init__(self, browser: str | None = None, org: str | None = None):
         super().__init__("Claude", "⚡ …")
         self._browser = browser
+        self._org_hint = org
         self._build_menu_items()
         self._init_state()
         self._update_toggle_label()
@@ -464,7 +517,7 @@ class ClaudeBar(rumps.App):
         if self._session is None:
             self._session = build_session(self._browser)
         if self._org_id is None:
-            self._org_id = get_org_id(self._session)
+            self._org_id, _ = get_org_id(self._session, self._org_hint)
 
     def _handle_error(self, exc: Exception):
         resp = getattr(exc, "response", None)
@@ -581,8 +634,16 @@ def main():
         metavar="BROWSER",
         help=f"Browser to read session cookie from. Choices: {', '.join(BROWSERS)}",
     )
+    parser.add_argument(
+        "--org",
+        metavar="NAME",
+        help=(
+            "Organization name (case-insensitive substring match) to query usage for. "
+            "Default: the org with a paid subscription, or the first one returned."
+        ),
+    )
     args = parser.parse_args()
-    ClaudeBar(browser=args.browser).run()
+    ClaudeBar(browser=args.browser, org=args.org).run()
 
 
 if __name__ == "__main__":

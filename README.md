@@ -261,6 +261,16 @@ To persist the choice, edit `~/.local/share/claude-bar/run.sh` and append `--bro
 
 **Note on Dia and Arc** — both are made by The Browser Company and are Chromium-based. `rookiepy` (the cookie-reading library) doesn't natively support Dia, so claude-bar reads the Dia cookie store directly via the macOS Keychain (`Dia Safe Storage`) + sqlite + `openssl` for AES decryption. No extra Python dependencies. Arc is supported by rookiepy directly.
 
+### `--org` flag
+
+If your Claude session has access to multiple organizations (e.g. a personal org and a Team org), claude-bar tries to pick the most likely one — paid plans first (`stripe_subscription`), then more capabilities. To force a specific org:
+
+```bash
+~/.local/share/claude-bar/run.sh --org "100ms"
+```
+
+The match is case-insensitive and prefers exact match → starts-with → substring. The selected org name is printed at startup so you can confirm. If the heuristic ever picks the wrong one, this flag is the override.
+
 ---
 
 ## How it works
