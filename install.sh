@@ -4,7 +4,7 @@ set -euo pipefail
 # ============================================================
 #  claude-bar installer
 # ============================================================
-GITHUB_OWNER="BOUSHABAMohammed"
+GITHUB_OWNER="mntrspace"
 GITHUB_REPO="claude-bar"
 # ============================================================
 

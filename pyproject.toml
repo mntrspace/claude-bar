@@ -1,11 +1,12 @@
 [project]
 name = "claude-bar"
-version = "0.1.0"
-description = "macOS menu bar app showing your Claude.ai usage (5h/7d utilization and extra credits)"
+version = "1.1.0"
+description = "macOS menu bar app showing your Claude.ai usage. Fork of BOUSHABAMohammed/claude-bar with opt-in auto-poll."
 readme = "README.md"
 license = { text = "MIT" }
 authors = [
-    { name = "Your Name", email = "you@example.com" },
+    { name = "BOUSHABAMohammed (upstream)" },
+    { name = "Mantra", email = "mantra@100ms.live" },
 ]
 keywords = ["claude", "anthropic", "usage", "menu-bar", "macos"]
 requires-python = ">=3.12"

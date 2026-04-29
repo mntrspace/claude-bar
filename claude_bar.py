@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Claude Usage macOS Menu Bar App
 
-Displays real usage data from claude.ai, refreshing every 5 minutes.
+Displays real usage data from claude.ai. Auto-refresh is opt-in via the menu
+(intervals: 5 / 10 / 30 / 60 minutes); manual refresh is always available.
 Run: python claude_bar.py
 """
 
@@ -24,15 +25,17 @@ from color_utils import (
     set_menu_title,
 )
 
-VERSION = "1.0.2"  # bump this with each release
-GITHUB_REPO = "BOUSHABAMohammed/claude-bar"
+VERSION = "1.1.0"  # bump this with each release
+GITHUB_REPO = "mntrspace/claude-bar"
 
-REFRESH_INTERVAL = 300  # seconds
+INTERVAL_OPTIONS = (300, 600, 1800, 3600)  # seconds: 5, 10, 30, 60 min
+DEFAULT_INTERVAL = 600  # 10 min — auto-poll is opt-in (off by default)
 ICON_SETUP_DELAY_SECS = 0.5  # give the run loop time to start before loading the icon
 UPDATE_CHECK_DELAY_SECS = 5.0  # wait for run loop to settle before hitting GitHub
 COOKIE_NAMES = ("sessionKey", "__Secure-next-auth.session-token")
 BROWSERS = ("chrome", "safari", "firefox", "brave", "edge")  # edge support on macOS is limited in rookiepy
 ICON_PATH = pathlib.Path(__file__).parent / "icons8-claude-ai-96.png"
+DEBUG_DUMP_PATH = pathlib.Path.home() / "Library" / "Caches" / "claude-bar" / "last-response.json"
 
 # Set to False to hide the percentage summary next to the menu bar icon.
 # Can also be toggled at runtime via the menu.
@@ -125,6 +128,18 @@ def fetch_usage(session: requests.Session, org_id: str) -> dict:
     return resp.json()
 
 
+def _dump_response(data: dict) -> None:
+    """Write the raw API response to disk so the renderer can be iterated against
+    real shapes. Mode 0600. Errors are non-fatal — we never want a debug aid to
+    take down the main refresh path."""
+    try:
+        DEBUG_DUMP_PATH.parent.mkdir(parents=True, exist_ok=True)
+        DEBUG_DUMP_PATH.write_text(json.dumps(data, indent=2, default=str))
+        DEBUG_DUMP_PATH.chmod(0o600)
+    except Exception as exc:
+        print(f"[claude_bar] dump error: {type(exc).__name__}: {exc}")
+
+
 # ---------------------------------------------------------------------------
 # Display helpers
 # ---------------------------------------------------------------------------
@@ -168,6 +183,8 @@ class ClaudeBar(rumps.App):
         self._build_menu_items()
         self._init_state()
         self._update_toggle_label()
+        self._update_auto_poll_label()
+        self._update_interval_marks()
         set_menu_title(self.five_h_hdr, make_section_header("5-Hour Window"))
         set_menu_title(self.seven_d_hdr, make_section_header("7-Day Window"))
         set_menu_title(self.credits_hdr, make_section_header("Extra Credits"))
@@ -190,6 +207,14 @@ class ClaudeBar(rumps.App):
         self.credits_row = rumps.MenuItem("  …")
         self.refresh_btn = rumps.MenuItem("  ⟳ Refresh Now", callback=self.on_refresh)
         self.summary_toggle = rumps.MenuItem("", callback=self.on_toggle_summary)
+        self.auto_poll_toggle = rumps.MenuItem("", callback=self.on_toggle_auto_poll)
+        self.interval_header = rumps.MenuItem("  ⏱ Refresh interval")
+        self.interval_items = {
+            secs: rumps.MenuItem("", callback=self._make_interval_callback(secs))
+            for secs in INTERVAL_OPTIONS
+        }
+        for item in self.interval_items.values():
+            self.interval_header.add(item)
         self.last_item = rumps.MenuItem("  Last updated: —")
         self.update_item = rumps.MenuItem("  🆕 Update available", callback=self.on_open_update)
         self.version_item = rumps.MenuItem(f"  v{VERSION}")
@@ -198,7 +223,10 @@ class ClaudeBar(rumps.App):
             self.five_h_hdr, self.five_h_row, None,
             self.seven_d_hdr, self.seven_d_row, None,
             self.credits_hdr, self.credits_row, None,
-            self.summary_toggle, self.refresh_btn, self.last_item, None,
+            self.summary_toggle,
+            self.auto_poll_toggle,
+            self.interval_header,
+            self.refresh_btn, self.last_item, None,
             self.update_item,
             self.version_item,
         ]
@@ -214,6 +242,9 @@ class ClaudeBar(rumps.App):
         self._last_sd_pct: float | None = None
         self._credits_shown: bool = False
         self._update_url: str = f"https://github.com/{GITHUB_REPO}/releases"
+        self._auto_poll_enabled: bool = False
+        self._poll_interval_secs: int = DEFAULT_INTERVAL
+        self._poll_timer: rumps.Timer | None = None
 
     # ------------------------------------------------------------------
     # Icon setup
@@ -244,6 +275,49 @@ class ClaudeBar(rumps.App):
         mark = "✓" if self._show_summary else "  "
         self.summary_toggle.title = f"  {mark} Show % in status bar"
 
+    def _update_auto_poll_label(self):
+        mins = self._poll_interval_secs // 60
+        self.auto_poll_toggle.title = (
+            f"  ✓ Auto-refresh: {mins} min"
+            if self._auto_poll_enabled
+            else f"  ▶ Start auto-refresh ({mins} min)"
+        )
+
+    def _update_interval_marks(self):
+        for secs, item in self.interval_items.items():
+            mark = "✓" if secs == self._poll_interval_secs else "  "
+            item.title = f"  {mark} {secs // 60} minutes"
+
+    # ------------------------------------------------------------------
+    # Auto-poll timer
+    # ------------------------------------------------------------------
+
+    def _make_interval_callback(self, secs: int):
+        def _cb(_):
+            self._set_interval(secs)
+        return _cb
+
+    def _set_interval(self, secs: int):
+        if secs == self._poll_interval_secs:
+            return
+        self._poll_interval_secs = secs
+        self._update_interval_marks()
+        self._update_auto_poll_label()
+        if self._auto_poll_enabled:
+            self._stop_timer()
+            self._start_timer()
+
+    def _start_timer(self):
+        # Re-create on each start so interval changes take effect cleanly,
+        # without relying on rumps.Timer.interval being live-mutable.
+        self._poll_timer = rumps.Timer(self._auto_refresh, self._poll_interval_secs)
+        self._poll_timer.start()
+
+    def _stop_timer(self):
+        if self._poll_timer is not None:
+            self._poll_timer.stop()
+            self._poll_timer = None
+
     # ------------------------------------------------------------------
     # Callbacks
     # ------------------------------------------------------------------
@@ -259,7 +333,14 @@ class ClaudeBar(rumps.App):
         self._update_toggle_label()
         self._apply_title()
 
-    @rumps.timer(REFRESH_INTERVAL)
+    def on_toggle_auto_poll(self, _):
+        self._auto_poll_enabled = not self._auto_poll_enabled
+        if self._auto_poll_enabled:
+            self._start_timer()
+        else:
+            self._stop_timer()
+        self._update_auto_poll_label()
+
     def _auto_refresh(self, _):
         self._refresh(None)
 
@@ -323,6 +404,7 @@ class ClaudeBar(rumps.App):
         try:
             self._ensure_session()
             data = fetch_usage(self._session, self._org_id)
+            _dump_response(data)
             callAfter(self._update_menu, data)
         except Exception as exc:
             callAfter(self._handle_error, exc)
