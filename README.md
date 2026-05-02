@@ -31,16 +31,20 @@ A macOS menu bar app that shows your real-time [Claude.ai](https://claude.ai) us
 
 ## What it shows
 
-- **5-hour window** — your current utilization with a progress bar and time until reset
-- **7-day window** — your rolling weekly utilization and next reset date
-- **Extra credits** — dollar amount used and remaining (shown only if you have a credit balance)
+- **Current session** (5-hour window) — utilization, progress bar, and time until reset
+- **Weekly limits** — All models, plus per-model breakdowns (Sonnet only, Opus only, Claude Design, etc.) and any other buckets the API exposes
+- **Additional features** — count-based metrics like daily routine runs (when applicable to your plan)
+- **Extra credits** — dollar amount used and remaining (shown only when you have a credit balance)
 - **Percentage summary** in the menu bar title (optional, togglable from the menu)
 - **Manual refresh** on demand via the menu
 - **Optional auto-refresh** — opt-in via the menu, with intervals of 5 / 10 / 30 / 60 minutes
+- **Organization switcher** — pick which org's usage to show, with a checkmark on the active one
+- **Browser switcher** — change which browser claude-bar reads the session cookie from
+- **Auto-detection on first run** — claude-bar probes your installed browsers and picks the one with a working Claude session, asking you only if there's ambiguity
+
+The renderer walks the API response generically. If Anthropic adds a new bucket type, claude-bar will show it on the next refresh — labeled with a curated name if known, or a prettified version of the API codename otherwise.
 
 By default, this fork does **not** auto-poll. The app fetches usage once on launch, then stays idle until you click *Refresh Now* or toggle on auto-refresh. See [Refresh behavior](#refresh-behavior) for why.
-
-> **Heads-up:** [claude.ai/settings/usage](https://claude.ai/settings/usage) currently exposes additional buckets (per-model weekly limits, daily routine runs, etc.) that this app does not yet render. A schema-driven renderer that absorbs new buckets without code changes is being worked on — see the v1.2 milestone. Today, the menu shows the three buckets listed above.
 
 ---
 
@@ -233,11 +237,21 @@ On every successful refresh, claude-bar writes the raw `/usage` response to:
 ~/Library/Caches/claude-bar/last-response.json
 ```
 
-Mode 0600 (only readable by you). Useful when a bucket you expect to see isn't rendered, or when contributing the renderer refactor (v1.2). Inspect with `jq`:
+Mode 0600 (only readable by you). Useful when a bucket you expect to see isn't rendered, or when contributing renderer-label improvements. Inspect with `jq`:
 
 ```bash
 jq keys ~/Library/Caches/claude-bar/last-response.json
 ```
+
+### Resetting saved settings
+
+Browser, organization, auto-poll, and interval preferences live at:
+
+```
+~/Library/Application Support/claude-bar/settings.json
+```
+
+Mode 0600. Delete the file (or just remove the keys you want to reset) and relaunch — claude-bar re-runs the first-run wizard and re-detects browsers if `browser` is no longer set.
 
 ---
 
@@ -245,31 +259,29 @@ jq keys ~/Library/Caches/claude-bar/last-response.json
 
 ### `--browser` flag
 
-By default claude-bar tries Chrome, Dia, Safari, Firefox, Brave, Edge, and Arc in order. The first browser that has a `claude.ai` session cookie wins — there's no validation that the cookie is still good, so a stale cookie in an earlier browser will be used in preference to a fresh one in a later browser. **If you're logged into Claude in only one browser, pass it explicitly to be safe:**
+**Most users won't need this.** On first launch, claude-bar probes every supported browser (Chrome, Dia, Safari, Firefox, Brave, Edge, Arc), picks the one with a working Claude session, and saves that choice. After that, you can switch via the **🌐 Browser** submenu in the menu bar. Settings persist across launches in `~/Library/Application Support/claude-bar/settings.json`.
+
+The CLI flag still exists as an override for one-off runs:
 
 ```bash
 ~/.local/share/claude-bar/run.sh --browser dia
-~/.local/share/claude-bar/run.sh --browser chrome
-~/.local/share/claude-bar/run.sh --browser safari
-~/.local/share/claude-bar/run.sh --browser firefox
-~/.local/share/claude-bar/run.sh --browser brave
-~/.local/share/claude-bar/run.sh --browser edge
-~/.local/share/claude-bar/run.sh --browser arc
 ```
 
-To persist the choice, edit `~/.local/share/claude-bar/run.sh` and append `--browser <name>` to the last line.
+CLI flags don't overwrite your saved browser choice — they're only effective for that session.
 
 **Note on Dia and Arc** — both are made by The Browser Company and are Chromium-based. `rookiepy` (the cookie-reading library) doesn't natively support Dia, so claude-bar reads the Dia cookie store directly via the macOS Keychain (`Dia Safe Storage`) + sqlite + `openssl` for AES decryption. No extra Python dependencies. Arc is supported by rookiepy directly.
 
-### `--org` flag
+### Switching organizations
 
-If your Claude session has access to multiple organizations (e.g. a personal org and a Team org), claude-bar tries to pick the most likely one — paid plans first (`stripe_subscription`), then more capabilities. To force a specific org:
+If your Claude session has access to multiple organizations (e.g. a personal org and a Team org), claude-bar auto-picks the one with a paid subscription. To switch, open the menu and choose a different one from the **🏢 Organization** submenu — your choice persists across launches.
+
+The CLI `--org NAME` flag still works as a one-off override (case-insensitive; exact match → starts-with → substring):
 
 ```bash
 ~/.local/share/claude-bar/run.sh --org "100ms"
 ```
 
-The match is case-insensitive and prefers exact match → starts-with → substring. The selected org name is printed at startup so you can confirm. If the heuristic ever picks the wrong one, this flag is the override.
+CLI flags don't overwrite the saved choice.
 
 ---
 
@@ -298,9 +310,15 @@ Forked from [BOUSHABAMohammed/claude-bar](https://github.com/BOUSHABAMohammed/cl
 What this fork (`mntrspace/claude-bar`) adds on top:
 
 - **Opt-in auto-poll** with an interval picker (5 / 10 / 30 / 60 minutes). Upstream auto-polls every 5 minutes by default; this fork ships with auto-poll **off** so the app makes ~zero background calls unless you explicitly turn it on. Reduces detection surface against Anthropic's bot filtering for users who only check occasionally.
-- **Debug response dump** at `~/Library/Caches/claude-bar/last-response.json`, mode 0600 — captures the raw `/usage` response on every refresh so the renderer can be made schema-driven (v1.2 work).
+- **First-run auto-detection** — probes every supported browser, picks the one with a working Claude session, prompts only if there's ambiguity. No CLI flags required for the common case.
+- **Persisted settings** at `~/Library/Application Support/claude-bar/settings.json` (mode 0600). Browser, org, auto-poll, interval, and "show %" all survive across launches.
+- **Schema-driven renderer** — walks the API response generically. New bucket types from Anthropic (per-model weekly limits, daily routine runs, etc.) appear automatically with curated labels for known keys and prettified codenames for unknowns.
+- **Organization switcher** in the menu (🏢 Organization submenu) — pick which org's usage to display, with a checkmark on the active one.
+- **Browser switcher** in the menu (🌐 Browser submenu) — change cookie source without restarting.
+- **Dia browser support** — `rookiepy` doesn't natively support The Browser Company's Dia, so this fork reads its cookie store directly via macOS Keychain + sqlite + openssl.
+- **Multi-org account handling** — paid `stripe_subscription` plans are auto-preferred over free personal orgs.
+- **Debug response dump** at `~/Library/Caches/claude-bar/last-response.json` (mode 0600) on every refresh — useful for inspecting the API shape if a bucket you expect isn't rendering.
 - **`CLAUDE.md`** — codebase guide for AI agents and humans picking up the project.
-- **Documentation updates** to the README — credits, refresh behavior, troubleshooting entry for the dump, and a clearer "what it does and doesn't render" note.
 
 Upstream commit history is preserved in `git log`.
 
