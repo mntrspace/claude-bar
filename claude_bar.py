@@ -26,7 +26,7 @@ from color_utils import (
     set_menu_title,
 )
 
-VERSION = "1.2.0"  # bump this with each release
+VERSION = "1.2.1"  # bump this with each release
 GITHUB_REPO = "mntrspace/claude-bar"
 
 INTERVAL_OPTIONS = (300, 600, 1800, 3600)  # seconds: 5, 10, 30, 60 min

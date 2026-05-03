@@ -1,6 +1,6 @@
 [project]
 name = "claude-bar"
-version = "1.2.0"
+version = "1.2.1"
 description = "macOS menu bar app showing your Claude.ai usage. Fork of BOUSHABAMohammed/claude-bar with opt-in auto-poll."
 readme = "README.md"
 license = { text = "MIT" }

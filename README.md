@@ -11,6 +11,7 @@ A macOS menu bar app that shows your real-time [Claude.ai](https://claude.ai) us
 
 ## Table of Contents
 
+- [Quick start](#quick-start)
 - [What it shows](#what-it-shows)
 - [Why this exists](#why-this-exists)
 - [Privacy and Security](#privacy-and-security)
@@ -26,6 +27,47 @@ A macOS menu bar app that shows your real-time [Claude.ai](https://claude.ai) us
 - [How it works](#how-it-works)
 - [Credits](#credits)
 - [License](#license)
+
+---
+
+## Quick start
+
+You need: macOS 12+, a paid Claude subscription, and to be logged in to [claude.ai](https://claude.ai) in any modern browser (Chrome, Dia, Safari, Firefox, Brave, Edge, or Arc).
+
+**1. Install:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mntrspace/claude-bar/main/install.sh | bash
+```
+
+The installer will ask if you want claude-bar to start at login — say yes if you want it always on. It puts everything in `~/.local/share/claude-bar/`, nothing else.
+
+**2. Launch it:**
+
+```bash
+~/.local/share/claude-bar/run.sh
+```
+
+(Or wait for the next login if you opted into autostart.)
+
+**3. Click "Always Allow" on the Keychain prompts.**
+
+The first time claude-bar reads your browser cookies, macOS asks for permission once per browser. Approve them — that's how the app talks to claude.ai using your existing session.
+
+**4. If you have multiple browsers logged in, pick one.**
+
+A small dialog appears asking which browser to use. Pick the one where you actually use Claude. It saves your choice.
+
+**5. Look at your menu bar.**
+
+You'll see a Claude icon with your current usage percentages (e.g. `20% · 6%`). Click it to see the full breakdown — current session, weekly limits per model, anything else the API surfaces.
+
+**Switch later:**
+- Different org → menu → 🏢 Organization
+- Different browser → menu → 🌐 Browser
+- Auto-refresh on/off → menu → ▶ Start auto-refresh
+
+**Reset everything:** delete `~/Library/Application\ Support/claude-bar/settings.json` and relaunch — the picker dialog comes back.
 
 ---
 
